@@ -1,25 +1,41 @@
 /**
- * hoerborn.pde (.ino)
- * Die Firmware für den Nachbau des Hoerbert Musikplayers.
- * Grundlage bildet das ASA1 MP3-Shield der Firma ELV.
- *
- * Die Dateien muessen in 9 Ordner mit Namen 1-9 abgelegt und aufsteigend sortiert sein.
- *
- * @mc       Arduino/RBBB (ATMEGA328)
- * @autor    Nicolas Born / nicolasborn@gmail.com
- * @version  1.0
- * @created  19.03.2016
- * @updated  17.06.2016
- *
- * Versionshistorie:
- * V 0.1:   - Erste Version
- * V 1.0:   - Erster Release
+   hoerborn.pde (.ino)
+   Die Firmware für den Nachbau des Hoerbert Musikplayers.
+   Grundlage bildet das ASA1 MP3-Shield der Firma ELV.
+   Update 1.1 added support for VS1053 Shields.
+
+   Die Dateien muessen in 9 Ordner mit Namen 1-9 abgelegt und aufsteigend sortiert sein.
+
+   @mc       Arduino/RBBB (ATMEGA328)
+   @autor    Nicolas Born / nicolasborn@gmail.com
+   @version  1.0
+   @created  19.03.2016
+   @updated  17.06.2016
+   @version  1.1
+   @created  03.02.2020
+
+   Versionshistorie:
+   V 0.1:   - Erste Version
+   V 1.0:   - Erster Release
+   V 1.1    - Added support for VS1053 Boards (mazwingel)
  **/
 
-#include <SD.h>
+//Use this define, when using an VS1053 Board, else comment it
+#define Shield_VS1053
+
+
+
 #include <SPI.h>
-#include <AudioShield.h>
 #include <EEPROM.h>
+#ifdef Shield_VS1053
+#include <SdFat.h>
+#include <SdFatUtil.h>
+#include <SFEMP3Shield.h>
+#else
+#include <AudioShield.h>
+#include <SD.h>
+#endif
+
 
 // Konstanten
 const int buttonsPin = A5;
@@ -51,46 +67,66 @@ unsigned long lastEepromEvent;
 // Buffer fuer Wiedergabe
 unsigned char buffer[32];
 
+//Setup for VS1053
+#ifdef Shield_VS1053
+SFEMP3Shield MP3player;
+SdFat sd;
+SdFile file;
+int shutdown_volume = 30; // start at 30 %
+#endif
+
 
 void setup() {
+#ifndef Shield_VS1053
   digitalWrite(6, HIGH);
-  Serial.begin(9600);
-  
+
   pinMode(LED_BLUE, OUTPUT);
   pinMode(LED_RED, OUTPUT);
   //beide LEDs ausschalten
   LED_BLUE_OFF;
   LED_RED_OFF;
-  
+#endif
+
+  Serial.begin(9600);
   pinMode(buttonsPin, INPUT);
   pinMode(volumePin, INPUT);
-  
+
   println("Start Hoerborn");
   //SD-Karte initialisieren
+#ifdef Shield_VS1053
+  sd.begin(SD_SEL, SPI_HALF_SPEED);
+#else
   if ( SD.begin( SD_CS ) == false )
   {
     println("Karte fehlt oder ist fehlerhaft");
     return;
   }
+#endif
   println("Karte initialisiert.");
-  
+
   countNumberOfFiles();
-  
+
+#ifdef Shield_VS1053
+  MP3player.begin();
+#else
   //MP3-Decoder initialisieren
   VS1011.begin();
-  
+#endif
+
   loadPreviouslyPlayedSong();
 }
 
 void loop() {
   checkAndSetButtonPressed();
-  if (currentFolder==-1) return;
+  if (currentFolder == -1) return;
   if (paused) return;
-  
+
   chooseFile();
   checkAndSetVolume();
 
   //Datei öffnen und abspielen
+
+#ifndef Shield_VS1053
   if (!SD.exists(filename)) {
     LED_RED_ON;
     delay(500);
@@ -105,7 +141,6 @@ void loop() {
     } else {
       println("Spiele Datei " + String(filename));
     }
-
     VS1011.UnsetMute();
     while (!paused && SoundFile.available()) {
       SoundFile.read(buffer, sizeof(buffer));
@@ -122,7 +157,7 @@ void loop() {
         SoundFile.close();
         return;
       }
-      if (millis()-lastEepromEvent>60000){
+      if (millis() - lastEepromEvent > 60000) {
         saveSongAndPositionInEeprom(SoundFile.position());
       }
     }
@@ -133,19 +168,49 @@ void loop() {
 
     chooseNextFile();
   }
+#else //Code for VS1053
+  if (filePosition > 0) {
+    println("Spiele Datei " + String(filename) + " weiter ab Position " + String(filePosition));
+    filePosition = 0;
+  } else {
+    println("Spiele Datei " + String(filename));
+  }
+  MP3player.setVolume(shutdown_volume, shutdown_volume);
+  while (!paused) {
+    MP3player.playMP3(filename, filePosition);
+    checkAndSetVolume();
+    if (checkAndSetButtonPressed()) {
+      if (paused && filePosition == 0) {
+        MP3player.pauseMusic();
+        filePosition = MP3player.currentPosition();
+        saveSongAndPositionInEeprom(filePosition);
+        println("Pausiert an Position " + String(filePosition));
+      }
+      MP3player.end();
+      return;
+    }
+    if (millis() - lastEepromEvent > 60000) {
+      saveSongAndPositionInEeprom(MP3player.currentPosition());
+    }
+  }
+
+  MP3player.end();
+
+  chooseNextFile();
+#endif
 }
 
 // Gibt true zurueck falls ein neuer Knopf gedrueckt wurde
 boolean checkAndSetButtonPressed() {
   int newButtonPressed = checkButtonPressed();
-  if (newButtonPressed == -1){
+  if (newButtonPressed == -1) {
     return false;
   }
   if (currentFolder == newButtonPressed) {
     return pauseUnpause();
   }
   paused = false;
-  if (newButtonPressed > 9){
+  if (newButtonPressed > 9) {
     return nextPreviousSong(newButtonPressed);
   }
   button = newButtonPressed;
@@ -158,21 +223,25 @@ boolean checkAndSetButtonPressed() {
 }
 
 void checkAndSetVolume() {
-  if (millis()-lastVolumeEvent<100){
+  if (millis() - lastVolumeEvent < 100) {
     return;
   }
   int volume = analogRead(volumePin);
   volume = map(volume, 1023, 0, 100, 0);
+#ifndef Shield_VS1053
   VS1011.SetVolume(volume, volume);
+#else
+  MP3player.setVolume(volume, volume);
+#endif
   lastVolumeEvent = millis();
 }
 
 // Pausiert den Song oder beendet die Pause,
 // wenn genuegend Zeit zwischen dem letzten Button vergangen ist (mehr als 1 Sekunde)
 // gibt true zurueck falls sich am Pause-Status etwas geaendert hat
-boolean pauseUnpause(){
-  if (millis()-lastButtonEvent<1000){
-    return false; 
+boolean pauseUnpause() {
+  if (millis() - lastButtonEvent < 1000) {
+    return false;
   }
   lastButtonEvent = millis();
   paused = !paused;
@@ -180,11 +249,11 @@ boolean pauseUnpause(){
 }
 
 // Waehlt das naechste/letzte Lied oder springt zum naechsten Ordner falls kein Lied mehr im Ordner vorhanden ist
-boolean nextPreviousSong(int newButtonPressed){
-  if (millis()-lastButtonEvent<1000){
+boolean nextPreviousSong(int newButtonPressed) {
+  if (millis() - lastButtonEvent < 1000) {
     return false;
   }
-  if (newButtonPressed == 11){
+  if (newButtonPressed == 11) {
     chooseNextFile();
   }
   filePosition = 0;
@@ -192,14 +261,14 @@ boolean nextPreviousSong(int newButtonPressed){
   return true;
 }
 
-void chooseNextFile(){
+void chooseNextFile() {
   currentFile++;
   // Pruefe ob Datei existiert, ansonsten wird die naechste gespeichert.
-  while (true){
-    if (numberOfFiles[currentFolder-1]>0 && numberOfFiles[currentFolder-1]>=currentFile){
+  while (true) {
+    if (numberOfFiles[currentFolder - 1] > 0 && numberOfFiles[currentFolder - 1] >= currentFile) {
       break;
     }
-    currentFolder = currentFolder==9?1:currentFolder+1;
+    currentFolder = currentFolder == 9 ? 1 : currentFolder + 1;
     currentFile = 1;
     button = currentFolder;
   }
@@ -226,9 +295,9 @@ int checkButtonPressed() {
   return -1;
 }
 
-void chooseFile(){
+void chooseFile() {
   sprintf(filename, "%d/%02d.mp3", currentFolder, currentFile);
-}  
+}
 
 // Zaehlt die Anzahl der Dateien auf der SD Karte und legt die Anzahl im Array ab
 // Annahme: die Dateien sind in 9 Ordner mit Namen 1-9 abgelegt und sind aufsteigend sortiert (01-99.mp3)
@@ -240,20 +309,25 @@ void countNumberOfFiles() {
     counter = 1;
     while (true) {
       sprintf(name, "%d/%02d.mp3", folder, counter++);
+#ifdef Shield_VS1053
+      if (!sd.exists(name) || counter > 99) {
+#else
       if (!SD.exists(name) || counter > 99) {
+#endif
         println("Fuer Ordner " + String(folder) + " wurden " + String(counter - 2) + " Dateien gefunden.");
-        numberOfFiles[folder++-1] = counter - 2;
+        numberOfFiles[folder++ -1] = counter - 2;
         break;
       }
+
     }
   }
 }
 
-void loadPreviouslyPlayedSong(){
+void loadPreviouslyPlayedSong() {
   int folderFromEeprom = EEPROM.read(0);
   int fileFromEeprom = EEPROM.read(1);
-  
-  if (folderFromEeprom<=0 || fileFromEeprom<=0 || folderFromEeprom>10 || fileFromEeprom>99){
+
+  if (folderFromEeprom <= 0 || fileFromEeprom <= 0 || folderFromEeprom > 10 || fileFromEeprom > 99) {
     return;
   }
   currentFolder = folderFromEeprom;
@@ -261,8 +335,8 @@ void loadPreviouslyPlayedSong(){
   filePosition = EEPROMReadLong(2);
 }
 
-void saveSongAndPositionInEeprom(long filePosition){
-  if (filePosition==0){
+void saveSongAndPositionInEeprom(long filePosition) {
+  if (filePosition == 0) {
     EEPROM.write(0, currentFolder);
     EEPROM.write(1, currentFile);
   }
@@ -272,7 +346,7 @@ void saveSongAndPositionInEeprom(long filePosition){
 
 // laedt einen long aus dem eeprom
 // uebernommen aus http://playground.arduino.cc/Code/EEPROMReadWriteLong
-long EEPROMReadLong(long address){
+long EEPROMReadLong(long address) {
   //Read the 4 bytes from the eeprom memory.
   long four = EEPROM.read(address);
   long three = EEPROM.read(address + 1);
@@ -285,14 +359,14 @@ long EEPROMReadLong(long address){
 
 // speichert einen long in dem eeprom
 // uebernommen aus http://playground.arduino.cc/Code/EEPROMReadWriteLong
-void EEPROMWriteLong(int address, long value){
+void EEPROMWriteLong(int address, long value) {
   // Decomposition from a long to 4 bytes by using bitshift.
   // One = Most significant -> Four = Least significant byte
   byte four = (value & 0xFF);
   byte three = ((value >> 8) & 0xFF);
   byte two = ((value >> 16) & 0xFF);
   byte one = ((value >> 24) & 0xFF);
- 
+
   //Write the 4 bytes into the eeprom memory.
   EEPROM.write(address, four);
   EEPROM.write(address + 1, three);
@@ -301,13 +375,13 @@ void EEPROMWriteLong(int address, long value){
 }
 
 // Gibt den aktuellen Zustand fuer Debugzwecke aus
-void printState(String location){
-  println(location + 
-  " - currentFolder:"+String(currentFolder)+
-  ", button:"+String(button)+
-  ", pause:"+String(paused)+
-  ", time:"+String(millis())+"/"+String(lastButtonEvent)+
-  ", filename:"+String(filename));
+void printState(String location) {
+  println(location +
+          " - currentFolder:" + String(currentFolder) +
+          ", button:" + String(button) +
+          ", pause:" + String(paused) +
+          ", time:" + String(millis()) + "/" + String(lastButtonEvent) +
+          ", filename:" + String(filename));
 }
 
 void println(String logMsg) {
