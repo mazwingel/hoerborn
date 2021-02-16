@@ -178,12 +178,12 @@ void loop() {
   }
   MP3player.setVolume(200, 200);
   result = MP3player.playMP3(filename, filePosition);
-  if(result != 0) {
-      Serial.print(F("Error code: "));
-      Serial.print(result);
-      Serial.println(F(" when trying to play track"));
+  if (result != 0) {
+    Serial.print(F("Error code: "));
+    Serial.print(result);
+    Serial.println(F(" when trying to play track"));
   }
-   while (!paused) { 
+  while (!paused) {
     checkAndSetVolume();
     if (checkAndSetButtonPressed()) {
       if (paused && filePosition == 0) {
@@ -192,7 +192,7 @@ void loop() {
         saveSongAndPositionInEeprom(filePosition);
         println("Pausiert an Position " + String(filePosition));
       }
-      MP3player.end();
+      MP3player.stopTrack();
       return;
     }
     if (millis() - lastEepromEvent > 60000) {
@@ -200,7 +200,7 @@ void loop() {
     }
   }
 
-  MP3player.end();
+  MP3player.stopTrack();
 
   chooseNextFile();
 #endif
@@ -234,10 +234,10 @@ void checkAndSetVolume() {
   }
   int volume = analogRead(volumePin);
 #ifndef Shield_VS1053
-   volume = map(volume, 1023, 0, 100, 0);
+  volume = map(volume, 1023, 0, 100, 0);
   VS1011.SetVolume(volume, volume);
 #else
-   volume= map((volume, 1023, 0, 2, 254);
+  volume = map(volume, 1023, 0, 2, 254);
   MP3player.setVolume(volume, volume);
 #endif
   lastVolumeEvent = millis();
