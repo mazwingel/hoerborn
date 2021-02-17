@@ -183,7 +183,7 @@ void loop() {
     Serial.print(result);
     Serial.println(F(" when trying to play track"));
   }
-  while (!paused) {
+  while (!paused && MP3player.isPlaying()) {
     checkAndSetVolume();
     if (checkAndSetButtonPressed()) {
       if (paused && filePosition == 0) {
@@ -238,7 +238,7 @@ void checkAndSetVolume() {
   VS1011.SetVolume(volume, volume);
 #else
   //volume = map(volume, 1023, 0, 2, 254);
-   volume = map(volume, 1023, 0, 100, 1); //Convert linear to db
+   volume = map(volume, 1023, 0, 1, 100); //Convert linear to db
    volume= 254 - 126 * log10(volume); 
    MP3player.setVolume(volume, volume);
 #endif
