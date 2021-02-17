@@ -237,8 +237,10 @@ void checkAndSetVolume() {
   volume = map(volume, 1023, 0, 100, 0);
   VS1011.SetVolume(volume, volume);
 #else
-  volume = map(volume, 1023, 0, 2, 254);
-  MP3player.setVolume(volume, volume);
+  //volume = map(volume, 1023, 0, 2, 254);
+   volume = map(volume, 1023, 0, 100, 1); //Convert linear to db
+   volume= 254 - 126 * log10(volume); 
+   MP3player.setVolume(volume, volume);
 #endif
   lastVolumeEvent = millis();
 }
